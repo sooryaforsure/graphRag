@@ -85,13 +85,20 @@ export async function getActiveBaseUrl(): Promise<string> {
 
   const envUrl = (import.meta as any).env?.VITE_API_URL;
   const custom = typeof window !== "undefined" ? localStorage.getItem("graphrag_api_url") : null;
-  const rawCandidates = [envUrl, custom, "/api", "http://127.0.0.1:8000", "http://localhost:8000"];
+  const rawCandidates = [
+    envUrl,
+    custom,
+    "https://graphrag-backend-pvn3.onrender.com",
+    "/api",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000"
+  ];
   const candidates = rawCandidates.filter(Boolean) as string[];
 
   for (const candidate of candidates) {
     const clean = candidate.endsWith("/") ? candidate.slice(0, -1) : candidate;
     try {
-      const res = await fetch(`${clean}/health`, { signal: AbortSignal.timeout(1500) });
+      const res = await fetch(`${clean}/health`, { signal: AbortSignal.timeout(2500) });
       if (res.ok) {
         resolvedBaseUrl = clean;
         return clean;
@@ -101,9 +108,9 @@ export async function getActiveBaseUrl(): Promise<string> {
     }
   }
 
-  // default fallback to /api proxy
-  resolvedBaseUrl = "/api";
-  return "/api";
+  // default fallback to live Render backend
+  resolvedBaseUrl = "https://graphrag-backend-pvn3.onrender.com";
+  return resolvedBaseUrl;
 }
 
 export function getApiBaseUrl(): string {
@@ -111,9 +118,9 @@ export function getApiBaseUrl(): string {
   const envUrl = (import.meta as any).env?.VITE_API_URL;
   if (envUrl) return envUrl.endsWith("/") ? envUrl.slice(0, -1) : envUrl;
   if (typeof window !== "undefined") {
-    return localStorage.getItem("graphrag_api_url") || "/api";
+    return localStorage.getItem("graphrag_api_url") || "https://graphrag-backend-pvn3.onrender.com";
   }
-  return "/api";
+  return "https://graphrag-backend-pvn3.onrender.com";
 }
 
 export function setApiBaseUrl(url: string) {
