@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Continue"
-$p05Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$tunnelDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$p05Dir = Split-Path -Parent (Split-Path -Parent $tunnelDir)
 Set-Location $p05Dir
 
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -25,7 +26,7 @@ Write-Host "[2/3] Establishing secure tunnel to Cloudflare Edge..." -ForegroundC
 # Kill any prior cloudflared process
 Get-Process -Name "*cloudflared*" -ErrorAction SilentlyContinue | Stop-Process -Force
 
-$exePath = Join-Path $p05Dir "cloudflared.exe"
+$exePath = Join-Path $tunnelDir "cloudflared.exe"
 $proc = Start-Process -FilePath $exePath -ArgumentList "tunnel", "--url", "http://localhost:8443", "--metrics", "127.0.0.1:20241" -NoNewWindow -PassThru
 
 $tunnelUrl = ""

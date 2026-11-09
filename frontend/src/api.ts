@@ -83,10 +83,10 @@ let resolvedBaseUrl: string = "";
 export async function getActiveBaseUrl(): Promise<string> {
   if (resolvedBaseUrl) return resolvedBaseUrl;
 
+  const envUrl = (import.meta as any).env?.VITE_API_URL;
   const custom = typeof window !== "undefined" ? localStorage.getItem("graphrag_api_url") : null;
-  const candidates = custom
-    ? [custom, "/api", "http://127.0.0.1:8000", "http://localhost:8000"]
-    : ["/api", "http://127.0.0.1:8000", "http://localhost:8000"];
+  const rawCandidates = [envUrl, custom, "/api", "http://127.0.0.1:8000", "http://localhost:8000"];
+  const candidates = rawCandidates.filter(Boolean) as string[];
 
   for (const candidate of candidates) {
     const clean = candidate.endsWith("/") ? candidate.slice(0, -1) : candidate;
@@ -108,6 +108,8 @@ export async function getActiveBaseUrl(): Promise<string> {
 
 export function getApiBaseUrl(): string {
   if (resolvedBaseUrl) return resolvedBaseUrl;
+  const envUrl = (import.meta as any).env?.VITE_API_URL;
+  if (envUrl) return envUrl.endsWith("/") ? envUrl.slice(0, -1) : envUrl;
   if (typeof window !== "undefined") {
     return localStorage.getItem("graphrag_api_url") || "/api";
   }

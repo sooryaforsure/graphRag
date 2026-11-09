@@ -6,6 +6,7 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
 
 # Environment variables & secrets
 .env
@@ -24,14 +25,13 @@ tunnel.log
 Thumbs.db
 
 # Local database & state storage
-graphRAG_Knowledge_System/backups/*.json
-graphRAG_Knowledge_System/jobs_store.json
+backend/backups/*.json
+backend/jobs_store.json
 
-# Large binaries (can be downloaded separately)
-cloudflared.exe
+# Large binaries & tools
+tools/tunnel/cloudflared.exe
 *.exe
 
 # IDE configs
 .vscode/
 .idea/
-

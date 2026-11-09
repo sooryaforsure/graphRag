@@ -1,8 +1,8 @@
 import json
 import re
-from ollama import AsyncClient
 import os
 import difflib
+from llm_client import llm_client
 
 def resolve_entity(new_entity: str, existing_nodes: list, threshold: float = 0.85, existing_map: dict = None) -> str:
     """
@@ -40,13 +40,13 @@ def resolve_entity(new_entity: str, existing_nodes: list, threshold: float = 0.8
 
 def clean_and_parse_llm_json(raw_output: str):
     """
-    Cleans local LLM output by removing markdown code blocks, 
+    Cleans LLM output by removing markdown code blocks, 
     extra whitespaces, or trailing characters, then parses as JSON.
     """
     if not raw_output:
         return {"nodes": [], "edges": []}
 
-    # Step 1: Remove markdown code blocks if Ollama included them
+    # Step 1: Remove markdown code blocks if included
     cleaned = re.sub(r"```(?:json)?\s*([\s\S]*?)\s*```", r"\1", raw_output.strip())
 
     # Step 2: Try direct JSON parsing
@@ -92,13 +92,12 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
     return chunks
 
 
-async def build_knowledge_graph(file_content: str, model_name: str = "llama3.2") -> tuple[list, list]:
+async def build_knowledge_graph(file_content: str, model_name: str = None) -> tuple[list, list]:
     """
-    Processes document text, queries Ollama to extract entities and relations,
+    Processes document text, queries the LLM (Groq / Ollama) to extract entities and relations,
     and returns a list of nodes and edges for database insertion.
     """
     chunks = chunk_text(file_content)
-    client = AsyncClient()
     
     extracted_nodes = []
     extracted_edges = []
@@ -117,18 +116,7 @@ async def build_knowledge_graph(file_content: str, model_name: str = "llama3.2")
 
     for chunk in chunks:
         try:
-            # We add a try-except block specifically for Ollama execution
-            response = await client.chat(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract knowledge graph from this text:\n\n{chunk}"}
-                ],
-                format="json",
-                options={"temperature": 0.0}
-            )
-            
-            raw_content = response.get("message", {}).get("content", "")
+            raw_content = await llm_client.extract_graph_json(chunk, system_prompt)
             parsed_data = clean_and_parse_llm_json(raw_content)
 
             # Add nodes safely with deduplication
@@ -160,11 +148,9 @@ async def build_knowledge_graph(file_content: str, model_name: str = "llama3.2")
                             "relation": relation
                         })
 
-        except ollama.ResponseError as e:
-            print(f"Ollama API Error: {e.error} (Status Code: {e.status_code})")
         except TimeoutError:
-            print("Ollama request timed out while processing text chunk.")
+            print("LLM request timed out while processing text chunk.")
         except Exception as e:
-            print(f"Unexpected error processing chunk through Ollama: {e}")
+            print(f"Unexpected error processing chunk through LLM: {e}")
 
     return extracted_nodes, extracted_edges

@@ -79,7 +79,7 @@ services:
 
   frontend:
     build:
-      context: ../Design Futuristic Knowledge System
+      context: ../frontend
       dockerfile: Dockerfile
     container_name: graphrag-frontend
     restart: unless-stopped

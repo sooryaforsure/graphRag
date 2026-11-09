@@ -9,7 +9,6 @@ import time
 import uuid
 import pypdf
 from dotenv import load_dotenv
-from ollama import AsyncClient
 import asyncio
 
 load_dotenv()
@@ -18,10 +17,7 @@ from core_extractor import build_knowledge_graph
 from db_client import neo4j_client
 from security import verify_api_key, RateLimitMiddleware, is_auth_enabled
 import backup_manager
-
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+from llm_client import llm_client
 
 app = FastAPI(title="GraphRAG Knowledge System API - Phase 4 Production")
 
@@ -36,8 +32,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-ollama_client = AsyncClient(host=OLLAMA_HOST)
 
 # Background job tracker with JSON file persistence
 JOBS_STORE_PATH = os.path.join(os.path.dirname(__file__), "jobs_store.json")
@@ -75,22 +69,18 @@ async def shutdown_event():
 @app.get("/health")
 async def health_check():
     neo4j_ok = await neo4j_client.ping()
-    ollama_ok = False
-    available_models = []
-    try:
-        models_info = await ollama_client.list()
-        ollama_ok = True
-        available_models = [m.model for m in getattr(models_info, "models", [])]
-    except Exception as e:
-        print(f"Ollama health check error: {e}")
+    llm_health = await llm_client.check_health()
+    llm_ok = llm_health.get("ok", False)
 
     return {
-        "status": "online" if (neo4j_ok and ollama_ok) else "degraded",
+        "status": "online" if (neo4j_ok and llm_ok) else "degraded",
         "neo4j": "connected" if neo4j_ok else "disconnected",
-        "ollama": "connected" if ollama_ok else "disconnected",
-        "model": OLLAMA_MODEL,
-        "embed_model": OLLAMA_EMBED_MODEL,
-        "available_models": available_models,
+        "ollama": "connected" if llm_ok else "disconnected", # preserved for frontend status badge
+        "llm_provider": llm_health.get("provider", "groq"),
+        "model": llm_health.get("model", "llama-3.3-70b-versatile"),
+        "embed_model": "nomic-ai/nomic-embed-text-v1.5",
+        "available_models": llm_health.get("available_models", []),
+        "llm_error": llm_health.get("error"),
         "auth_enabled": is_auth_enabled()
     }
 
@@ -149,26 +139,24 @@ async def _process_ingest_background(
         if not text_content.strip():
             raise ValueError("Document appears to be empty or contains unreadable content.")
 
+        active_provider = os.getenv("LLM_PROVIDER", llm_client.provider).upper()
+        active_model = llm_client.groq_model if active_provider.lower() == "groq" else llm_client.ollama_model
+
         job["progress"] = 35
-        job["stage"] = f"Extracting entities & relations with Ollama ({OLLAMA_MODEL})..."
+        job["stage"] = f"Extracting entities & relations with {active_provider} ({active_model})..."
         _save_job(job)
 
-        nodes, edges = await build_knowledge_graph(text_content, model_name=OLLAMA_MODEL)
+        nodes, edges = await build_knowledge_graph(text_content)
 
         job["progress"] = 70
-        job["stage"] = f"Generating 768-d vector embeddings ({OLLAMA_EMBED_MODEL})..."
+        job["stage"] = "Generating 768-d vector embeddings..."
         _save_job(job)
 
-        async def _embed(node):
-            try:
-                res = await ollama_client.embeddings(model=OLLAMA_EMBED_MODEL, prompt=node['id'])
-                node['embedding'] = res.get('embedding')
-            except Exception as e:
-                print(f"Embedding warning for {node.get('id')}: {e}")
-            return node
-
         if nodes:
-            nodes = await asyncio.gather(*[_embed(n) for n in nodes])
+            node_texts = [n.get('id', '') for n in nodes]
+            embeddings = await llm_client.get_embeddings_batch(node_texts)
+            for n, emb in zip(nodes, embeddings):
+                n['embedding'] = emb
 
         job["progress"] = 90
         job["stage"] = f"Merging into Neo4j graph database (Workspace: {workspace})..."
@@ -202,7 +190,7 @@ async def upload_file(
 ):
     """
     Asynchronous document ingestion endpoint.
-    Queues document for background parsing, Ollama extraction, embedding, and Neo4j merge.
+    Queues document for background parsing, Groq/LLM extraction, embedding, and Neo4j merge.
     Returns immediately with a job_id for progress tracking.
     """
     content = await file.read()
@@ -225,11 +213,9 @@ async def upload_file(
     _save_job(job_data)
 
     if sync:
-        # Synchronous execution mode if caller requests it
         await _process_ingest_background(job_id, content, filename, workspace)
         return jobs_db[job_id]
 
-    # Asynchronous background execution (prevents HTTP timeouts)
     background_tasks.add_task(_process_ingest_background, job_id, content, filename, workspace)
 
     return {
@@ -260,35 +246,12 @@ async def list_upload_jobs():
 # ==============================================================================
 
 async def _extract_search_entities(question: str) -> list[str]:
-    """Extracts search keywords/entities from question using Ollama."""
-    entity_prompt = f"""
-    Extract the key search entities from the following question to query a knowledge graph. 
-    Return ONLY a JSON object with a single key "entities" containing a list of strings.
-    Question: {question}
-    """
-    try:
-        entity_response = await ollama_client.chat(
-            model=OLLAMA_MODEL, 
-            messages=[{'role': 'user', 'content': entity_prompt}], 
-            format="json", 
-            options={'temperature': 0.0}
-        )
-        entities_data = json.loads(entity_response['message']['content'])
-        entities = entities_data.get("entities", [])
-        if entities:
-            return entities
-    except Exception:
-        pass
-    return [w for w in question.split() if len(w) > 3]
+    """Extracts search keywords/entities from question using LLM."""
+    return await llm_client.extract_search_entities(question)
 
 async def _get_question_embedding(question: str) -> Optional[list]:
-    """Computes dense 768-d vector embedding for query using Ollama nomic-embed-text."""
-    try:
-        res = await ollama_client.embeddings(model=OLLAMA_EMBED_MODEL, prompt=question)
-        return res.get("embedding")
-    except Exception as e:
-        print(f"Question embedding error: {e}")
-        return None
+    """Computes dense 768-d vector embedding for query."""
+    return await llm_client.get_embedding(question)
 
 @app.post("/query")
 async def query_graph(
@@ -333,11 +296,11 @@ async def query_graph(
     else:
         prompt = f"The knowledge graph does not contain direct context for the entities: {', '.join(search_entities)}.\nPlease answer based on general knowledge or note that this is not in the graph.\n\nQuestion: {question}"
 
-    ans = await ollama_client.chat(model=OLLAMA_MODEL, messages=[{'role': 'user', 'content': prompt}], options={'temperature': 0.0})
+    ans_text = await llm_client.generate_chat(prompt=prompt, temperature=0.0)
     latency_ms = int((time.time() - start_time) * 1000)
 
     return {
-        "answer": ans['message']['content'],
+        "answer": ans_text,
         "context": relevant_context,
         "extracted_entities": search_entities,
         "workspace": ws,
@@ -402,17 +365,8 @@ async def query_graph_stream(
         yield f"data: {json.dumps(meta_event)}\n\n"
 
         try:
-            stream = await ollama_client.chat(
-                model=OLLAMA_MODEL,
-                messages=[{'role': 'user', 'content': prompt}],
-                stream=True,
-                options={'temperature': 0.0}
-            )
-
-            async for chunk in stream:
-                token = chunk.get('message', {}).get('content', '')
-                if token:
-                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+            async for token in llm_client.stream_chat(prompt=prompt, temperature=0.0):
+                yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
@@ -439,7 +393,7 @@ async def summarize_knowledge_base(
     """
     Global knowledge graph synthesis endpoint.
     Retrieves highest-degree central entity hubs and relationships across the graph,
-    then uses Ollama llama3.2 to produce an executive overview.
+    then uses LLM to produce an executive overview.
     """
     ws = workspace
     try:
@@ -477,15 +431,15 @@ async def summarize_knowledge_base(
     Format your response with clear markdown headings and bullet points.
     """
     
-    ans = await ollama_client.chat(model=OLLAMA_MODEL, messages=[{'role': 'user', 'content': prompt}], options={'temperature': 0.2})
+    ans_text = await llm_client.generate_chat(prompt=prompt, temperature=0.2)
     latency_ms = int((time.time() - start_time) * 1000)
 
     # Extract unique entity names for UI chips
     entities = list(dict.fromkeys([f.split(" -[")[0].strip() for f in hub_facts if " -[" in f]))[:8]
 
     return {
-        "summary": ans['message']['content'],
-        "answer": ans['message']['content'],
+        "summary": ans_text,
+        "answer": ans_text,
         "context": hub_facts,
         "extracted_entities": entities,
         "facts_used": len(hub_facts),

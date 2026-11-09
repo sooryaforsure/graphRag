@@ -348,7 +348,7 @@ export default function App() {
     setBackupNotice(null);
     try {
       const res = await createGraphBackup(workspace);
-      setBackupNotice(`Backup saved: ${res.filename} (${res.snapshot.node_count} nodes, ${res.snapshot.edge_count} relations)`);
+      const nodes = res.snapshot?.node_count ?? (res as any).node_count ?? 0; const edges = res.snapshot?.edge_count ?? (res as any).edge_count ?? 0; setBackupNotice(`Backup saved: ${res.filename} (${nodes} nodes, ${edges} relations)`);
       setTimeout(() => setBackupNotice(null), 6000);
     } catch (err: any) {
       alert(`Backup failed: ${err.message || err}`);

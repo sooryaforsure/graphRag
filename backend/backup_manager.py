@@ -52,7 +52,7 @@ async def create_backup(workspace: str = "all") -> dict:
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(backup_payload, f, indent=2)
 
-    return {
+    snapshot = {
         "filename": filename,
         "filepath": filepath,
         "workspace": workspace,
@@ -60,6 +60,18 @@ async def create_backup(workspace: str = "all") -> dict:
         "edge_count": len(edges),
         "created_at": backup_payload["created_at"],
         "size_bytes": os.path.getsize(filepath)
+    }
+
+    return {
+        "success": True,
+        "filename": filename,
+        "filepath": filepath,
+        "workspace": workspace,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "created_at": backup_payload["created_at"],
+        "size_bytes": os.path.getsize(filepath),
+        "snapshot": snapshot
     }
 
 def list_backups() -> list[dict]:

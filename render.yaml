@@ -1,0 +1,47 @@
+services:
+  # 1. FastAPI GraphRAG Backend
+  - type: web
+    name: graphrag-backend
+    env: python
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn server:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: LLM_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: EMBEDDING_PROVIDER
+        value: fastembed
+      - key: FASTEMBED_MODEL
+        value: nomic-ai/nomic-embed-text-v1.5
+      - key: NEO4J_URI
+        value: neo4j+s://a7736626.databases.neo4j.io
+      - key: NEO4J_USER
+        value: a7736626
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: GRAPHRAG_API_KEY
+        value: srjforsure-company-token-2026
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 180
+
+  # 2. Vite React Frontend
+  - type: web
+    name: graphrag-frontend
+    env: static
+    rootDir: frontend
+    buildCommand: "npm install && npm run build"
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: graphrag-backend
+          property: host
